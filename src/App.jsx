@@ -20,7 +20,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
   Everything is computed HERE from OHLC, so signals are real, not decorative.
 
   ── WIRING IN YOUR REAL DATA ────────────────────────────────────────────────
-  Replace SAMPLE with an export from daily_ohlc. Expected shape, one row/bar,
+  The viewer loads an export from daily_ohlc. Expected shape, one row/bar,
   oldest→newest, using ADJUSTED prices (close_adj etc). volume = volume_adj.
 
     [{ date:"2025-01-02", open:100.2, high:101.0, low:99.5, close:100.8,
@@ -33,7 +33,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
     WHERE symbol='OGDC' AND close_adj IS NOT NULL
     ORDER BY trade_date;
 
-  Export as JSON and paste into SAMPLE (or fetch it). Indicators + signals
+  The JSON is fetched at runtime. Indicators + signals
   recompute automatically from the bars — you don't precompute them here. If
   later you want to show signals your OFFLINE generator produced (to check the
   two agree), add an optional `signal:"buy"|"sell"` field per row and set
@@ -42,39 +42,6 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 */
 
 const USE_EXTERNAL_SIGNALS = false;
-
-// ---- sample data: trends up, chops sideways, breaks out, rolls over -------
-function makeSample() {
-  const bars = [];
-  let price = 80, date = new Date("2025-01-02");
-  const push = (drift, vol, volSpike = 1) => {
-    const o = price;
-    const noise = (Math.sin(bars.length / 3) + (Math.random() - 0.5)) * vol;
-    let c = Math.max(1, o + drift + noise);
-    const hi = Math.max(o, c) + Math.random() * vol * 0.6;
-    const lo = Math.min(o, c) - Math.random() * vol * 0.6;
-    const baseV = 900000 + Math.random() * 400000;
-    bars.push({
-      date: date.toISOString().slice(0, 10),
-      open: +o.toFixed(2), high: +hi.toFixed(2),
-      low: +Math.max(0.5, lo).toFixed(2), close: +c.toFixed(2),
-      volume: Math.round(baseV * volSpike),
-    });
-    price = c;
-    do { date.setDate(date.getDate() + 1); }
-    while (date.getDay() === 0 || date.getDay() === 6);
-  };
-  // phase 1: slow uptrend
-  for (let i = 0; i < 40; i++) push(0.5, 1.6, 1 + (i % 7 === 0 ? 0.6 : 0));
-  // phase 2: choppy sideways (whipsaw territory)
-  for (let i = 0; i < 35; i++) push(0, 2.2, 1);
-  // phase 3: breakout on volume
-  for (let i = 0; i < 25; i++) push(1.4, 2.0, i < 6 ? 1.9 : 1.1);
-  // phase 4: roll over
-  for (let i = 0; i < 30; i++) push(-0.9, 2.4, i % 5 === 0 ? 1.4 : 1);
-  return bars;
-}
-const SAMPLE = makeSample();
 
 // ---- indicator math -------------------------------------------------------
 const sma = (a, n, i) => {
@@ -220,7 +187,8 @@ const COL = {
 
 export default function App() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
-  const [bars] = useState(SAMPLE);
+  const [bars, setBars] = useState(null);
+  const [dataError, setDataError] = useState(null);
   const [show, setShow] = useState({ smaFast: true, smaSlow: true, bb: false });
   const [selected, setSelected] = useState(null);
   const [hover, setHover] = useState(null);
@@ -228,18 +196,39 @@ export default function App() {
   const [w, setW] = useState(900);
 
   useEffect(() => {
+    fetch("/data/OGDC.json")
+      .then(response => {
+        if (!response.ok) throw new Error(`Data request failed (${response.status})`);
+        return response.json();
+      })
+      .then(payload => {
+        if (!Array.isArray(payload.bars) || payload.bars.length === 0) {
+          throw new Error("The market-data export contains no bars.");
+        }
+        setBars(payload.bars);
+      })
+      .catch(error => setDataError(error.message));
+  }, []);
+
+  useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(e => setW(e[0].contentRect.width));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [bars]);
 
-  const ind = useMemo(() => computeIndicators(bars, cfg), [bars, cfg]);
+  const ind = useMemo(() => bars ? computeIndicators(bars, cfg) : null, [bars, cfg]);
   const signals = useMemo(
-    () => USE_EXTERNAL_SIGNALS ? externalSignals(bars) : generateSignals(bars, ind, cfg),
+    () => bars && ind ? (USE_EXTERNAL_SIGNALS ? externalSignals(bars) : generateSignals(bars, ind, cfg)) : [],
     [bars, ind, cfg]
   );
+
+  if (!bars) {
+    return <div style={{ background: COL.bg, color: dataError ? COL.down : COL.text, padding: 24, borderRadius: 10 }}>
+      {dataError ? `Unable to load historical market data: ${dataError}` : "Loading historical market data…"}
+    </div>;
+  }
 
   // layout
   const padL = 8, padR = 56, padT = 10;
@@ -323,7 +312,7 @@ export default function App() {
         <Stat label="Signals" value={`${signals.filter(s=>s.type==="buy").length} buy / ${signals.filter(s=>s.type==="sell").length} sell`} />
         <Stat label="Closed trades" value={trades.length} />
         <Stat label="Win rate" value={trades.length ? `${Math.round(100*wins/trades.length)}%` : "—"} />
-        <Stat label="Avg return / trade" value={`${(avgRet*100).toFixed(2)}%`} note="pre-cost, sample data" />
+        <Stat label="Avg return / trade" value={`${(avgRet*100).toFixed(2)}%`} note="pre-cost, historical data" />
       </div>
 
       <div ref={wrapRef} style={{ width: "100%", position: "relative" }}>
@@ -468,9 +457,7 @@ export default function App() {
           <Slider label="Vol avg window" v={cfg.volLen} min={5} max={50} onChange={v => setCfg(c => ({ ...c, volLen: v }))} />
         </div>
         <div style={{ fontSize: 11, color: COL.text, marginTop: 8, lineHeight: 1.6 }}>
-          Sample data only — trends up, chops sideways, breaks out, then rolls over, so you can watch the
-          signal behave (and whipsaw) in each regime. Replace <code>SAMPLE</code> with a daily_ohlc export
-          (adjusted prices) to see it on a real name. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
+          Data source: adjusted OGDC daily OHLCV exported from the PSX database. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
         </div>
       </details>
     </div>

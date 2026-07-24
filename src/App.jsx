@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { DEFAULT_SYMBOL, fetchOhlcv, fetchSymbols } from "./api";
 import SymbolSelector from "./SymbolSelector";
+import { boundedViewport, panViewport, presetViewport, RANGE_PRESETS, zoomViewport } from "./chartViewport";
 
 /*
   PSX Signal Viewer — phase-1 chart + trend-following signal generator (v1)
@@ -45,6 +46,7 @@ import SymbolSelector from "./SymbolSelector";
 
 const USE_EXTERNAL_SIGNALS = false;
 const SYMBOL_STORAGE_KEY = "psx_signal_viewer_symbol";
+const PAN_DRAG_THRESHOLD_PX = 4;
 
 // ---- indicator math -------------------------------------------------------
 const sma = (a, n, i) => {
@@ -203,7 +205,10 @@ export default function App() {
   const [show, setShow] = useState({ smaFast: true, smaSlow: true, bb: false });
   const [selected, setSelected] = useState(null);
   const [hover, setHover] = useState(null);
+  const [viewport, setViewport] = useState({ start: 0, end: 0, mode: "ALL" });
   const wrapRef = useRef(null);
+  const panRef = useRef(null);
+  const suppressChartClickRef = useRef(false);
   const symbolsRequestRef = useRef(null);
   const dataRequestRef = useRef(null);
   const [w, setW] = useState(900);
@@ -222,6 +227,7 @@ export default function App() {
         if (!Array.isArray(payload) || payload.length === 0) {
           throw new Error(`No historical market data is available for ${symbol}.`);
         }
+        setViewport(current => presetViewport(payload, current.mode === "Custom" ? "ALL" : current.mode));
         setBars(payload);
         setLoadedSymbol(symbol);
         setTypedSymbol(symbol);
@@ -313,6 +319,25 @@ export default function App() {
     () => bars && ind ? (USE_EXTERNAL_SIGNALS ? externalSignals(bars) : generateSignals(bars, ind, cfg)) : [],
     [bars, ind, cfg]
   );
+  const currentViewport = useMemo(
+    () => bars ? boundedViewport(viewport, bars.length) : viewport,
+    [bars, viewport]
+  );
+  const visibleBars = useMemo(
+    () => bars ? bars.slice(currentViewport.start, currentViewport.end) : [],
+    [bars, currentViewport]
+  );
+  const visibleInd = useMemo(() => {
+    if (!ind) return null;
+    const { start, end } = currentViewport;
+    return Object.fromEntries(Object.entries(ind).map(([key, values]) => [key, values.slice(start, end)]));
+  }, [ind, currentViewport]);
+  const visibleSignals = useMemo(
+    () => signals
+      .filter(signal => signal.i >= currentViewport.start && signal.i < currentViewport.end)
+      .map(signal => ({ signal, visibleIndex: signal.i - currentViewport.start })),
+    [signals, currentViewport]
+  );
 
   const selector = (
     <SymbolSelector
@@ -340,12 +365,21 @@ export default function App() {
             <span style={{ marginLeft: 10, fontSize: 12 }}>trend-following · {cfg.breakoutLen}-day breakout + volume + MACD</span>
           </div>
           {loadedSymbol && bars && (
-            <div style={{ marginTop: 4, fontSize: 10.5 }}>
-              Symbol: <span style={{ color: COL.textHi }}>{loadedSymbol}</span>
-              {" · "}Bars: {bars.length.toLocaleString()}
-              {" · "}Range: {bars[0].date} → {bars[bars.length - 1].date}
-              {" · "}Source: HTTP API
-            </div>
+            <>
+              <div style={{ marginTop: 4, fontSize: 10.5 }}>
+                Symbol: <span style={{ color: COL.textHi }}>{loadedSymbol}</span>
+                {" · "}Bars: {bars.length.toLocaleString()}
+                {" · "}Range: {bars[0].date} → {bars[bars.length - 1].date}
+                {" · "}Source: HTTP API
+              </div>
+              {visibleBars.length > 0 && (
+                <div data-viewport-metadata style={{ marginTop: 2, fontSize: 10.5, color: COL.textHi }}>
+                  Visible: {visibleBars[0].date} → {visibleBars[visibleBars.length - 1].date}
+                  {" · "}Bars: {visibleBars.length.toLocaleString()}
+                  {" · "}Mode: {currentViewport.mode}
+                </div>
+              )}
+            </>
           )}
         </div>
         {selector}
@@ -389,21 +423,21 @@ export default function App() {
   const padL = 8, padR = 56, padT = 10;
   const priceH = 300, volH = 70, macdH = 90, rsiH = 80, gap = 8;
   const plotW = Math.max(320, w - padL - padR);
-  const n = bars.length;
+  const n = visibleBars.length;
   const cw = plotW / n;                 // column width
   const bw = Math.max(1.5, cw * 0.62);  // candle body width
 
-  const priceMin = Math.min(...bars.map(b => b.low));
-  const priceMax = Math.max(...bars.map(b => b.high));
+  const priceMin = Math.min(...visibleBars.map(b => b.low));
+  const priceMax = Math.max(...visibleBars.map(b => b.high));
   const pPad = (priceMax - priceMin) * 0.06;
   const yP = v => padT + priceH - ((v - (priceMin - pPad)) / ((priceMax + pPad) - (priceMin - pPad))) * priceH;
   const xC = i => padL + i * cw + cw / 2;
 
-  const volMax = Math.max(...bars.map(b => b.volume));
+  const volMax = Math.max(...visibleBars.map(b => b.volume));
   const volTop = padT + priceH + gap;
   const yV = v => volTop + volH - (v / volMax) * volH;
 
-  const macdVals = ind.macd.filter(v => v != null).concat(ind.signalLine.filter(v => v != null), ind.hist.filter(v => v != null));
+  const macdVals = visibleInd.macd.filter(v => v != null).concat(visibleInd.signalLine.filter(v => v != null), visibleInd.hist.filter(v => v != null));
   const macdAbs = Math.max(0.001, ...macdVals.map(Math.abs));
   const macdTop = volTop + volH + gap;
   const yM = v => macdTop + macdH / 2 - (v / macdAbs) * (macdH / 2 - 4);
@@ -443,11 +477,48 @@ export default function App() {
   const avgRet = trades.length ? trades.reduce((a, t) => a + t.ret, 0) / trades.length : 0;
 
   const num = (v, d = 0) => v.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+  const selectPreset = preset => {
+    setViewport(presetViewport(bars, preset));
+    setHover(null);
+  };
+  const resetViewport = () => {
+    setViewport(current => presetViewport(bars, current.mode === "Custom" ? "ALL" : current.mode));
+    setHover(null);
+  };
 
   return (
     <div style={{ background: COL.bg, color: COL.text, fontFamily: "ui-sans-serif, system-ui, sans-serif", padding: 14, borderRadius: 10 }}>
       {header}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <div data-viewport-controls style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+          {RANGE_PRESETS.map(preset => (
+            <button
+              type="button"
+              data-preset={preset}
+              key={preset}
+              onClick={() => selectPreset(preset)}
+              style={{
+                background: currentViewport.mode === preset ? "#2f4968" : "transparent",
+                color: currentViewport.mode === preset ? COL.textHi : COL.text,
+                border: `1px solid ${COL.axis}`,
+                borderRadius: 5,
+                padding: "3px 7px",
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              {preset}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={resetViewport}
+            style={{ background: "transparent", color: COL.text, border: `1px solid ${COL.axis}`, borderRadius: 5, padding: "3px 8px", fontSize: 11, cursor: "pointer", marginLeft: 3 }}
+          >
+            Reset View
+          </button>
+          <span style={{ fontSize: 10, marginLeft: 4 }}>Wheel to zoom · drag to pan</span>
+        </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[["smaFast", `SMA${cfg.smaFast}`], ["smaSlow", `SMA${cfg.smaSlow}`], ["bb", "Bollinger"]].map(([k, lbl]) => (
             <button key={k} onClick={() => setShow(s => ({ ...s, [k]: !s[k] }))}
@@ -468,14 +539,77 @@ export default function App() {
       </div>
 
       <div ref={wrapRef} style={{ width: "100%", position: "relative" }}>
-        <svg width="100%" height={totalH} viewBox={`0 0 ${w} ${totalH}`} style={{ display: "block" }}
-          onMouseMove={e => {
+        <svg
+          data-chart-surface
+          data-visible-bars={n}
+          width="100%"
+          height={totalH}
+          viewBox={`0 0 ${w} ${totalH}`}
+          style={{ display: "block", cursor: "grab", touchAction: "none", userSelect: "none" }}
+          onWheel={event => {
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = (event.clientX - rect.left) * (w / rect.width);
+            const anchorRatio = (x - padL) / plotW;
+            setViewport(current => zoomViewport(current, bars.length, anchorRatio, event.deltaY));
+            setHover(null);
+          }}
+          onPointerDown={event => {
+            if (event.button !== 0) return;
+            if (event.target.closest("[data-signal-marker]")) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            panRef.current = {
+              pointerId: event.pointerId,
+              startX: event.clientX,
+              viewport: currentViewport,
+              didDrag: false,
+            };
+          }}
+          onPointerMove={e => {
+            if (panRef.current?.pointerId === e.pointerId) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const deltaX = e.clientX - panRef.current.startX;
+              if (Math.abs(deltaX) >= PAN_DRAG_THRESHOLD_PX) {
+                panRef.current.didDrag = true;
+                const count = panRef.current.viewport.end - panRef.current.viewport.start;
+                const barDelta = -(deltaX / rect.width) * count;
+                setViewport(panViewport(panRef.current.viewport, bars.length, barDelta));
+                setHover(null);
+              }
+              return;
+            }
             const r = e.currentTarget.getBoundingClientRect();
             const x = (e.clientX - r.left) * (w / r.width);
             const i = Math.round((x - padL - cw / 2) / cw);
             setHover(i >= 0 && i < n ? i : null);
           }}
-          onMouseLeave={() => setHover(null)}>
+          onPointerUp={event => {
+            if (panRef.current?.pointerId === event.pointerId) {
+              if (panRef.current.didDrag) {
+                suppressChartClickRef.current = true;
+                setTimeout(() => {
+                  suppressChartClickRef.current = false;
+                }, 0);
+              }
+              panRef.current = null;
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+            }
+          }}
+          onPointerCancel={() => {
+            panRef.current = null;
+          }}
+          onPointerLeave={() => {
+            if (!panRef.current) setHover(null);
+          }}
+          onClickCapture={event => {
+            if (suppressChartClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+        >
 
           {/* price gridlines + axis labels */}
           {Array.from({ length: priceTicks + 1 }).map((_, k) => {
@@ -489,13 +623,13 @@ export default function App() {
 
           {/* Bollinger */}
           {show.bb && <>
-            {line(ind.bbUp, yP, COL.bb, 1)}
-            {line(ind.bbLo, yP, COL.bb, 1)}
-            {line(ind.bbMid, yP, COL.bb + "aa", 1)}
+            {line(visibleInd.bbUp, yP, COL.bb, 1)}
+            {line(visibleInd.bbLo, yP, COL.bb, 1)}
+            {line(visibleInd.bbMid, yP, COL.bb + "aa", 1)}
           </>}
 
           {/* candles */}
-          {bars.map((b, i) => {
+          {visibleBars.map((b, i) => {
             const up = b.close >= b.open;
             const col = up ? COL.up : COL.down;
             const x = xC(i);
@@ -508,17 +642,27 @@ export default function App() {
           })}
 
           {/* SMAs */}
-          {show.smaFast && line(ind.smaFast, yP, COL.smaFast, 1.4)}
-          {show.smaSlow && line(ind.smaSlow, yP, COL.smaSlow, 1.4)}
+          {show.smaFast && line(visibleInd.smaFast, yP, COL.smaFast, 1.4)}
+          {show.smaSlow && line(visibleInd.smaSlow, yP, COL.smaSlow, 1.4)}
 
           {/* signal markers */}
-          {signals.map((s, k) => {
-            const x = xC(s.i);
+          {visibleSignals.map(({ signal: s, visibleIndex }, k) => {
+            const x = xC(visibleIndex);
             const isBuy = s.type === "buy";
-            const y = isBuy ? yP(bars[s.i].low) + 16 : yP(bars[s.i].high) - 16;
+            const y = isBuy ? yP(visibleBars[visibleIndex].low) + 16 : yP(visibleBars[visibleIndex].high) - 16;
             const col = isBuy ? COL.buy : COL.sell;
             const sel = selected && selected.i === s.i && selected.type === s.type;
-            return <g key={k} style={{ cursor: "pointer" }} onClick={() => setSelected(s)}>
+            return <g
+              data-signal-marker
+              data-signal-type={s.type}
+              key={k}
+              style={{ cursor: "pointer" }}
+              onPointerDown={event => event.stopPropagation()}
+              onClick={event => {
+                event.stopPropagation();
+                setSelected(s);
+              }}
+            >
               <path d={isBuy
                 ? `M${x},${y-7} L${x-6},${y+5} L${x+6},${y+5} Z`
                 : `M${x},${y+7} L${x-6},${y-5} L${x+6},${y-5} Z`}
@@ -528,28 +672,28 @@ export default function App() {
 
           {/* crosshair */}
           {hover != null && <>
-            <line x1={xC(hover)} x2={xC(hover)} y1={padT} y2={rsiTop + rsiH} stroke={COL.axis} strokeWidth={1} strokeDasharray="3 3" />
+            <line data-crosshair x1={xC(hover)} x2={xC(hover)} y1={padT} y2={rsiTop + rsiH} stroke={COL.axis} strokeWidth={1} strokeDasharray="3 3" />
           </>}
 
           {/* volume pane */}
           <text x={padL} y={volTop + 10} fill={COL.text} fontSize={10}>Volume</text>
-          {bars.map((b, i) => {
+          {visibleBars.map((b, i) => {
             const up = b.close >= b.open;
             return <rect key={i} x={xC(i) - bw / 2} y={yV(b.volume)} width={bw} height={volTop + volH - yV(b.volume)}
               fill={up ? COL.up + "77" : COL.down + "77"} />;
           })}
-          {line(ind.volSma, yV, COL.smaFast, 1)}
+          {line(visibleInd.volSma, yV, COL.smaFast, 1)}
 
           {/* MACD pane */}
           <text x={padL} y={macdTop + 10} fill={COL.text} fontSize={10}>MACD {cfg.macdFast},{cfg.macdSlow},{cfg.macdSig}</text>
           <line x1={padL} x2={padL + plotW} y1={yM(0)} y2={yM(0)} stroke={COL.axis} strokeWidth={1} />
-          {bars.map((b, i) => ind.hist[i] == null ? null : (
-            <rect key={i} x={xC(i) - bw / 2} y={Math.min(yM(0), yM(ind.hist[i]))}
-              width={bw} height={Math.abs(yM(ind.hist[i]) - yM(0))}
-              fill={ind.hist[i] >= 0 ? COL.macdHistUp : COL.macdHistDn} />
+          {visibleBars.map((b, i) => visibleInd.hist[i] == null ? null : (
+            <rect key={i} x={xC(i) - bw / 2} y={Math.min(yM(0), yM(visibleInd.hist[i]))}
+              width={bw} height={Math.abs(yM(visibleInd.hist[i]) - yM(0))}
+              fill={visibleInd.hist[i] >= 0 ? COL.macdHistUp : COL.macdHistDn} />
           ))}
-          {line(ind.macd, yM, COL.macdLine, 1.3)}
-          {line(ind.signalLine, yM, COL.macdSig, 1.3)}
+          {line(visibleInd.macd, yM, COL.macdLine, 1.3)}
+          {line(visibleInd.signalLine, yM, COL.macdSig, 1.3)}
 
           {/* RSI pane */}
           <text x={padL} y={rsiTop + 10} fill={COL.text} fontSize={10}>RSI {cfg.rsiLen}</text>
@@ -559,24 +703,24 @@ export default function App() {
               <text x={padL + plotW + 5} y={yR(t) + 3} fill={COL.text} fontSize={9}>{t}</text>
             </g>
           ))}
-          {line(ind.rsi, yR, COL.rsi, 1.3)}
+          {line(visibleInd.rsi, yR, COL.rsi, 1.3)}
         </svg>
 
         {/* hover readout */}
         {hover != null && (
           <div style={{ position: "absolute", top: 4, left: 12, background: COL.panel, border: `1px solid ${COL.axis}`,
             borderRadius: 6, padding: "6px 9px", fontSize: 11, pointerEvents: "none", color: COL.textHi, lineHeight: 1.5 }}>
-            <div style={{ color: COL.text }}>{bars[hover].date}</div>
-            <div>O {bars[hover].open.toFixed(2)}  H {bars[hover].high.toFixed(2)}  L {bars[hover].low.toFixed(2)}  C {bars[hover].close.toFixed(2)}</div>
-            <div style={{ color: COL.text }}>Vol {(bars[hover].volume/1e6).toFixed(2)}M
-              {ind.rsi[hover]!=null && `  ·  RSI ${ind.rsi[hover].toFixed(0)}`}
-              {ind.hist[hover]!=null && `  ·  MACDh ${ind.hist[hover].toFixed(2)}`}</div>
+            <div style={{ color: COL.text }}>{visibleBars[hover].date}</div>
+            <div>O {visibleBars[hover].open.toFixed(2)}  H {visibleBars[hover].high.toFixed(2)}  L {visibleBars[hover].low.toFixed(2)}  C {visibleBars[hover].close.toFixed(2)}</div>
+            <div style={{ color: COL.text }}>Vol {(visibleBars[hover].volume/1e6).toFixed(2)}M
+              {visibleInd.rsi[hover]!=null && `  ·  RSI ${visibleInd.rsi[hover].toFixed(0)}`}
+              {visibleInd.hist[hover]!=null && `  ·  MACDh ${visibleInd.hist[hover].toFixed(2)}`}</div>
           </div>
         )}
       </div>
 
       {/* selected signal explanation */}
-      <div style={{ marginTop: 12, background: COL.panel, border: `1px solid ${COL.axis}`, borderRadius: 8, padding: "12px 14px", minHeight: 62 }}>
+      <div data-signal-details style={{ marginTop: 12, background: COL.panel, border: `1px solid ${COL.axis}`, borderRadius: 8, padding: "12px 14px", minHeight: 62 }}>
         {selected ? (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>

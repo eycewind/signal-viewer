@@ -46,6 +46,20 @@ The last successfully loaded symbol is saved in browser local storage and
 restored after refresh. Invalid input and failed requests leave the current
 chart in place so another symbol can be selected or the request retried.
 
+## Navigate the chart
+
+Use `1M`, `3M`, `6M`, `1Y`, `3Y`, `5Y`, or `ALL` to select a calendar-based
+visible range. The metadata below the symbol shows the visible dates, bar
+count, and current mode.
+
+Place the pointer over the chart and use the mouse wheel to zoom horizontally.
+Click and drag horizontally to pan through history. Manual zoom or pan changes
+the mode to `Custom`; **Reset View** returns a custom viewport to `ALL`.
+
+All OHLCV remains loaded in the browser. Indicators and signals continue to be
+calculated from the full history, while the viewport controls only which
+already-calculated values are rendered.
+
 The C1 script at `scripts/export_market_data.py` remains available as a
 diagnostic/manual export utility. It is not used by the viewer's runtime path.
 

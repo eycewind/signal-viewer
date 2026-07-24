@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import { fetchOhlcv } from "./api";
 
 /*
   PSX Signal Viewer — phase-1 chart + trend-following signal generator (v1)
@@ -20,7 +21,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
   Everything is computed HERE from OHLC, so signals are real, not decorative.
 
   ── WIRING IN YOUR REAL DATA ────────────────────────────────────────────────
-  The viewer loads an export from daily_ohlc. Expected shape, one row/bar,
+  The viewer loads daily_ohlc through the data API. Expected shape, one row/bar,
   oldest→newest, using ADJUSTED prices (close_adj etc). volume = volume_adj.
 
     [{ date:"2025-01-02", open:100.2, high:101.0, low:99.5, close:100.8,
@@ -33,7 +34,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
     WHERE symbol='OGDC' AND close_adj IS NOT NULL
     ORDER BY trade_date;
 
-  The JSON is fetched at runtime. Indicators + signals
+  OHLCV is fetched at runtime. Indicators + signals
   recompute automatically from the bars — you don't precompute them here. If
   later you want to show signals your OFFLINE generator produced (to check the
   two agree), add an optional `signal:"buy"|"sell"` field per row and set
@@ -196,16 +197,12 @@ export default function App() {
   const [w, setW] = useState(900);
 
   useEffect(() => {
-    fetch("/data/OGDC.json")
-      .then(response => {
-        if (!response.ok) throw new Error(`Data request failed (${response.status})`);
-        return response.json();
-      })
+    fetchOhlcv("OGDC")
       .then(payload => {
-        if (!Array.isArray(payload.bars) || payload.bars.length === 0) {
-          throw new Error("The market-data export contains no bars.");
+        if (!Array.isArray(payload) || payload.length === 0) {
+          throw new Error("The market-data API returned no bars.");
         }
-        setBars(payload.bars);
+        setBars(payload);
       })
       .catch(error => setDataError(error.message));
   }, []);
@@ -457,7 +454,7 @@ export default function App() {
           <Slider label="Vol avg window" v={cfg.volLen} min={5} max={50} onChange={v => setCfg(c => ({ ...c, volLen: v }))} />
         </div>
         <div style={{ fontSize: 11, color: COL.text, marginTop: 8, lineHeight: 1.6 }}>
-          Data source: adjusted OGDC daily OHLCV exported from the PSX database. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
+          Data source: adjusted OGDC daily OHLCV from the PSX data API. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
         </div>
       </details>
     </div>

@@ -1,4 +1,44 @@
-# React + Vite
+# Signal Viewer
+
+The viewer loads adjusted OHLCV data from a temporary local FastAPI service.
+The browser only knows the service's HTTP URL, so the API can later move
+without changing viewer behavior.
+
+## Start the data API
+
+Create a Python environment, install the service dependencies, and point the
+service at the PSX SQLite database:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r api/requirements.txt
+export PSX_DB_PATH=/path/to/psx_watcher.db
+uvicorn api.app:app --reload --port 8000
+```
+
+The service opens SQLite in read-only mode. Its endpoints are:
+
+- `GET /health`
+- `GET /symbols`
+- `GET /ohlcv/{symbol}`
+
+## Start the viewer
+
+In another shell:
+
+```bash
+npm install
+VITE_API_URL=http://localhost:8000 npm run dev
+```
+
+`VITE_API_URL` is the centralized browser-side service location. It defaults
+to `http://localhost:8000` for local development.
+
+The C1 script at `scripts/export_market_data.py` remains available as a
+diagnostic/manual export utility. It is not used by the viewer's runtime path.
+
+## Vite template notes
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 

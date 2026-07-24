@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
-import { fetchOhlcv } from "./api";
+import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { DEFAULT_SYMBOL, fetchOhlcv, fetchSymbols } from "./api";
+import SymbolSelector from "./SymbolSelector";
 
 /*
   PSX Signal Viewer — phase-1 chart + trend-following signal generator (v1)
@@ -31,7 +32,7 @@ import { fetchOhlcv } from "./api";
     SELECT trade_date AS date, open_adj AS open, high_adj AS high,
            low_adj AS low, close_adj AS close, volume_adj AS volume
     FROM daily_ohlc
-    WHERE symbol='OGDC' AND close_adj IS NOT NULL
+    WHERE symbol=? AND close_adj IS NOT NULL
     ORDER BY trade_date;
 
   OHLCV is fetched at runtime. Indicators + signals
@@ -43,6 +44,7 @@ import { fetchOhlcv } from "./api";
 */
 
 const USE_EXTERNAL_SIGNALS = false;
+const SYMBOL_STORAGE_KEY = "psx_signal_viewer_symbol";
 
 // ---- indicator math -------------------------------------------------------
 const sma = (a, n, i) => {
@@ -189,23 +191,114 @@ const COL = {
 export default function App() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
   const [bars, setBars] = useState(null);
+  const [symbols, setSymbols] = useState([]);
+  const [symbolsLoading, setSymbolsLoading] = useState(true);
+  const [symbolsError, setSymbolsError] = useState(null);
+  const [typedSymbol, setTypedSymbol] = useState("");
+  const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [loadedSymbol, setLoadedSymbol] = useState(null);
+  const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState(null);
+  const [validationError, setValidationError] = useState(null);
   const [show, setShow] = useState({ smaFast: true, smaSlow: true, bb: false });
   const [selected, setSelected] = useState(null);
   const [hover, setHover] = useState(null);
   const wrapRef = useRef(null);
+  const symbolsRequestRef = useRef(null);
+  const dataRequestRef = useRef(null);
   const [w, setW] = useState(900);
 
-  useEffect(() => {
-    fetchOhlcv("OGDC")
+  const loadSymbol = useCallback(symbol => {
+    dataRequestRef.current?.abort();
+    const controller = new AbortController();
+    dataRequestRef.current = controller;
+    setSelectedSymbol(symbol);
+    setDataLoading(true);
+    setDataError(null);
+    setValidationError(null);
+
+    fetchOhlcv(symbol, { signal: controller.signal })
       .then(payload => {
         if (!Array.isArray(payload) || payload.length === 0) {
-          throw new Error("The market-data API returned no bars.");
+          throw new Error(`No historical market data is available for ${symbol}.`);
         }
         setBars(payload);
+        setLoadedSymbol(symbol);
+        setTypedSymbol(symbol);
+        setSelected(null);
+        setHover(null);
+        try {
+          localStorage.setItem(SYMBOL_STORAGE_KEY, symbol);
+        } catch {
+          // Storage may be unavailable in privacy-restricted browser contexts.
+        }
       })
-      .catch(error => setDataError(error.message));
+      .catch(error => {
+        if (error.name !== "AbortError") {
+          setDataError(`Unable to load ${symbol}: ${error.message}`);
+        }
+      })
+      .finally(() => {
+        if (dataRequestRef.current === controller) {
+          setDataLoading(false);
+        }
+      });
   }, []);
+
+  const loadSymbols = useCallback(() => {
+    symbolsRequestRef.current?.abort();
+    const controller = new AbortController();
+    symbolsRequestRef.current = controller;
+    setSymbolsLoading(true);
+    setSymbolsError(null);
+
+    fetchSymbols({ signal: controller.signal })
+      .then(available => {
+        if (available.length === 0) {
+          throw new Error("The symbol API returned no symbols.");
+        }
+        setSymbols(available);
+        let storedSymbol = "";
+        try {
+          storedSymbol = (localStorage.getItem(SYMBOL_STORAGE_KEY) || "").trim().toUpperCase();
+        } catch {
+          // Continue with the configured default when storage is unavailable.
+        }
+        const initialSymbol = available.includes(storedSymbol)
+          ? storedSymbol
+          : available.includes(DEFAULT_SYMBOL) ? DEFAULT_SYMBOL : available[0];
+        setTypedSymbol(initialSymbol);
+        loadSymbol(initialSymbol);
+      })
+      .catch(error => {
+        if (error.name !== "AbortError") {
+          setSymbolsError(`Unable to load symbols: ${error.message}`);
+        }
+      })
+      .finally(() => {
+        if (symbolsRequestRef.current === controller) {
+          setSymbolsLoading(false);
+        }
+      });
+  }, [loadSymbol]);
+
+  useEffect(() => {
+    loadSymbols();
+    return () => {
+      symbolsRequestRef.current?.abort();
+      dataRequestRef.current?.abort();
+    };
+  }, [loadSymbols]);
+
+  const confirmSymbol = symbol => {
+    const normalized = symbol.trim().toUpperCase();
+    setTypedSymbol(normalized);
+    if (!symbols.includes(normalized)) {
+      setValidationError(`"${normalized || "Empty ticker"}" is not an available symbol.`);
+      return;
+    }
+    loadSymbol(normalized);
+  };
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -221,10 +314,75 @@ export default function App() {
     [bars, ind, cfg]
   );
 
+  const selector = (
+    <SymbolSelector
+      symbols={symbols}
+      value={typedSymbol}
+      onValueChange={value => {
+        setTypedSymbol(value);
+        setValidationError(null);
+      }}
+      onConfirm={confirmSymbol}
+      loading={symbolsLoading}
+      disabled={symbols.length === 0}
+    />
+  );
+
+  const statusMessage = validationError || dataError || symbolsError;
+  const header = (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+        <div style={{ textAlign: "left" }}>
+          <div>
+            <span style={{ color: COL.textHi, fontSize: 17, fontWeight: 500 }}>
+              Signal viewer{loadedSymbol ? ` · ${loadedSymbol}` : ""}
+            </span>
+            <span style={{ marginLeft: 10, fontSize: 12 }}>trend-following · {cfg.breakoutLen}-day breakout + volume + MACD</span>
+          </div>
+          {loadedSymbol && bars && (
+            <div style={{ marginTop: 4, fontSize: 10.5 }}>
+              Symbol: <span style={{ color: COL.textHi }}>{loadedSymbol}</span>
+              {" · "}Bars: {bars.length.toLocaleString()}
+              {" · "}Range: {bars[0].date} → {bars[bars.length - 1].date}
+              {" · "}Source: HTTP API
+            </div>
+          )}
+        </div>
+        {selector}
+      </div>
+      {symbolsError && (
+        <div style={{ color: COL.down, fontSize: 12, marginBottom: 8 }}>
+          {symbolsError}{" "}
+          <button type="button" onClick={loadSymbols} style={{ color: COL.textHi, background: "transparent", border: `1px solid ${COL.axis}`, borderRadius: 5, cursor: "pointer" }}>
+            Retry symbols
+          </button>
+        </div>
+      )}
+      {(validationError || dataError) && (
+        <div role="alert" style={{ color: validationError ? COL.smaFast : COL.down, fontSize: 12, marginBottom: 8 }}>
+          {validationError || dataError}
+          {dataError && selectedSymbol && (
+            <button type="button" onClick={() => loadSymbol(selectedSymbol)} style={{ marginLeft: 8, color: COL.textHi, background: "transparent", border: `1px solid ${COL.axis}`, borderRadius: 5, cursor: "pointer" }}>
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+      {dataLoading && (
+        <div style={{ color: COL.text, fontSize: 11, marginBottom: 8 }}>
+          Loading {selectedSymbol}…
+        </div>
+      )}
+    </>
+  );
+
   if (!bars) {
-    return <div style={{ background: COL.bg, color: dataError ? COL.down : COL.text, padding: 24, borderRadius: 10 }}>
-      {dataError ? `Unable to load historical market data: ${dataError}` : "Loading historical market data…"}
-    </div>;
+    return (
+      <div style={{ background: COL.bg, color: COL.text, fontFamily: "ui-sans-serif, system-ui, sans-serif", padding: 14, borderRadius: 10, minHeight: 120 }}>
+        {header}
+        {!statusMessage && <div style={{ padding: "12px 0" }}>Loading historical market data…</div>}
+      </div>
+    );
   }
 
   // layout
@@ -288,11 +446,8 @@ export default function App() {
 
   return (
     <div style={{ background: COL.bg, color: COL.text, fontFamily: "ui-sans-serif, system-ui, sans-serif", padding: 14, borderRadius: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <div>
-          <span style={{ color: COL.textHi, fontSize: 17, fontWeight: 500 }}>Signal viewer</span>
-          <span style={{ marginLeft: 10, fontSize: 12 }}>trend-following · {cfg.breakoutLen}-day breakout + volume + MACD</span>
-        </div>
+      {header}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[["smaFast", `SMA${cfg.smaFast}`], ["smaSlow", `SMA${cfg.smaSlow}`], ["bb", "Bollinger"]].map(([k, lbl]) => (
             <button key={k} onClick={() => setShow(s => ({ ...s, [k]: !s[k] }))}
@@ -454,7 +609,7 @@ export default function App() {
           <Slider label="Vol avg window" v={cfg.volLen} min={5} max={50} onChange={v => setCfg(c => ({ ...c, volLen: v }))} />
         </div>
         <div style={{ fontSize: 11, color: COL.text, marginTop: 8, lineHeight: 1.6 }}>
-          Data source: adjusted OGDC daily OHLCV from the PSX data API. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
+          Data source: adjusted {loadedSymbol} daily OHLCV from the PSX data API. Returns shown are pre-cost; the real cost gate lives in the C5 harness.
         </div>
       </details>
     </div>

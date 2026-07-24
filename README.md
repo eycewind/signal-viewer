@@ -35,6 +35,17 @@ VITE_API_URL=http://localhost:8000 npm run dev
 `VITE_API_URL` is the centralized browser-side service location. It defaults
 to `http://localhost:8000` for local development.
 
+## Select a symbol
+
+The viewer retrieves the authoritative ticker list from `GET /symbols`. Type
+in the symbol field to search, use the arrow keys and Enter or click a
+suggestion, or enter an exact ticker and choose **Load**. Prefix matches appear
+first.
+
+The last successfully loaded symbol is saved in browser local storage and
+restored after refresh. Invalid input and failed requests leave the current
+chart in place so another symbol can be selected or the request retried.
+
 The C1 script at `scripts/export_market_data.py` remains available as a
 diagnostic/manual export utility. It is not used by the viewer's runtime path.
 

@@ -15,6 +15,20 @@ const METRIC_LABELS = {
   brier_score: "Brier score",
 };
 const FOLD_MARKS = { fold_2023: "●", fold_2024: "■", fold_2025: "▲" };
+const PRIMARY_MODELS = ["hist_gradient_boosting_cpu", "lightgbm_cpu", "xgboost_gpu"];
+const MODEL_COLORS = {
+  hist_gradient_boosting_cpu: "#76a7d7",
+  lightgbm_cpu: "#e1b85b",
+  xgboost_gpu: "#c28bd8",
+};
+const METRICS_BY_TYPE = {
+  regression: ["mean_daily_ic", "median_daily_ic", "positive_ic_fraction", "spearman", "quantile_spread", "rmse", "mae"],
+  classification: ["roc_auc", "log_loss"],
+};
+const DEFAULT_METRICS = {
+  regression: ["mean_daily_ic", "quantile_spread", "rmse"],
+  classification: ["roc_auc", "log_loss"],
+};
 
 function formatValue(value, metric) {
   if (value == null) return "Undefined";
@@ -30,6 +44,9 @@ export default function MlModelAnalysis({ active }) {
   const [summary, setSummary] = useState(null);
   const [summaryError, setSummaryError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [analysisType, setAnalysisType] = useState("regression");
+  const [selectedMetrics, setSelectedMetrics] = useState(DEFAULT_METRICS.regression);
+  const [selectedModels, setSelectedModels] = useState(PRIMARY_MODELS);
   const [metric, setMetric] = useState("mean_daily_ic");
   const [model, setModel] = useState("lightgbm_cpu");
   const [target, setTarget] = useState("fwd_open_to_close_ret_10s_adj");
@@ -75,10 +92,44 @@ export default function MlModelAnalysis({ active }) {
     return () => controller.abort();
   }, [active, summary, model, target, metric]);
 
-  const overviewRows = useMemo(
-    () => summary?.series.filter(row => row.target === target) ?? [],
-    [summary, target],
+  const comparisonTargets = useMemo(
+    () => analysisType === "regression"
+      ? summary?.filters.regression_targets ?? []
+      : summary?.filters.classification_targets ?? [],
+    [analysisType, summary],
   );
+  const comparisonRows = useMemo(
+    () => summary?.series.filter(row => comparisonTargets.includes(row.target) && selectedModels.includes(row.model)) ?? [],
+    [summary, comparisonTargets, selectedModels],
+  );
+
+  function changeAnalysisType(nextType) {
+    setAnalysisType(nextType);
+    setSelectedMetrics(DEFAULT_METRICS[nextType]);
+    const targets = nextType === "regression" ? summary.filters.regression_targets : summary.filters.classification_targets;
+    setTarget(targets[0]);
+    setMetric(DEFAULT_METRICS[nextType][0]);
+  }
+
+  function toggleMetric(value) {
+    setSelectedMetrics(current => {
+      if (current.includes(value)) return current.length === 1 ? current : current.filter(item => item !== value);
+      return current.length >= 4 ? current : [...current, value];
+    });
+  }
+
+  function toggleModel(value) {
+    setSelectedModels(current => {
+      if (current.includes(value)) return current.length === 1 ? current : current.filter(item => item !== value);
+      return [...current, value];
+    });
+  }
+
+  function selectComparisonPoint(nextModel, nextTarget, nextMetric) {
+    setModel(nextModel);
+    setTarget(nextTarget);
+    setMetric(nextMetric);
+  }
 
   if (!active) return null;
   if (loading && !summary) return <AnalysisState label="Loading accepted C7 validation results…" />;
@@ -99,20 +150,28 @@ export default function MlModelAnalysis({ active }) {
 
       <aside className="analysis-conclusion"><strong>Research conclusion</strong><span>{summary.conclusion}</span></aside>
 
-      <div className="ml-controls" aria-label="Model analysis filters">
-        <label>Model<select value={model} onChange={event => setModel(event.target.value)}>{summary.filters.models.map(value => <option key={value}>{value}</option>)}</select></label>
-        <label>Target<select value={target} onChange={event => setTarget(event.target.value)}>{allTargets.map(value => <option key={value}>{value}</option>)}</select></label>
-        <label>Metric<select value={metric} onChange={event => setMetric(event.target.value)}>{summary.overview_metrics.map(value => <option key={value} value={value}>{METRIC_LABELS[value] ?? value}</option>)}</select></label>
+      <div className="comparison-controls" aria-label="Comparison controls">
+        <label className="analysis-type">Analysis family<select value={analysisType} onChange={event => changeAnalysisType(event.target.value)}><option value="regression">Future returns · regression</option><option value="classification">Up / down · classification</option></select></label>
+        <fieldset><legend>Metrics <span>{selectedMetrics.length}/4 selected</span></legend><div className="check-grid">{METRICS_BY_TYPE[analysisType].map(value => <label key={value}><input type="checkbox" checked={selectedMetrics.includes(value)} disabled={!selectedMetrics.includes(value) && selectedMetrics.length >= 4} onChange={() => toggleMetric(value)} /><span>{METRIC_LABELS[value]}</span></label>)}</div></fieldset>
+        <fieldset><legend>Models</legend><div className="check-grid model-checks">{PRIMARY_MODELS.map(value => <label key={value}><input type="checkbox" checked={selectedModels.includes(value)} onChange={() => toggleModel(value)} /><i style={{ background: MODEL_COLORS[value] }} /><span>{shortModelName(value)}</span></label>)}</div></fieldset>
       </div>
 
       {detailError && <div className="ml-error" role="alert">{statusText(detailError)}</div>}
 
       <section className="analysis-panel" aria-labelledby="overview-title">
-        <div className="panel-heading"><div><p className="section-number">01</p><h2 id="overview-title">Model overview</h2></div><p>Aggregate across the three validation folds</p></div>
-        <div className="overview-grid">
-          {overviewRows.map(row => <MetricTile key={row.model} row={row} metric={metric} selected={row.model === model} onSelect={() => setModel(row.model)} />)}
+        <div className="panel-heading"><div><p className="section-number">01</p><h2 id="overview-title">Models × targets</h2></div><p>Selected metrics · aggregate across validation folds</p></div>
+        <p className="comparison-guidance">Each panel has its own scale. Select any point to inspect that exact model, target, and metric across the 2023–2025 folds below.</p>
+        <div className="comparison-grid">
+          {selectedMetrics.map(value => <ComparisonPanel key={value} metric={value} targets={comparisonTargets} models={selectedModels} rows={comparisonRows} selection={{ model, target, metric }} onSelect={selectComparisonPoint} />)}
         </div>
       </section>
+
+      <div className="drill-controls" aria-label="Selected comparison detail">
+        <strong>Drill-down</strong>
+        <label>Model<select value={model} onChange={event => setModel(event.target.value)}>{summary.filters.models.map(value => <option key={value}>{value}</option>)}</select></label>
+        <label>Target<select value={target} onChange={event => setTarget(event.target.value)}>{allTargets.map(value => <option key={value}>{value}</option>)}</select></label>
+        <label>Metric<select value={metric} onChange={event => setMetric(event.target.value)}>{summary.overview_metrics.map(value => <option key={value} value={value}>{METRIC_LABELS[value] ?? value}</option>)}</select></label>
+      </div>
 
       <section className="analysis-panel" aria-labelledby="fold-title">
         <div className="panel-heading"><div><p className="section-number">02</p><h2 id="fold-title">Fold comparison</h2></div><p>One shared axis; nulls remain visible</p></div>
@@ -133,13 +192,41 @@ export default function MlModelAnalysis({ active }) {
   );
 }
 
-function MetricTile({ row, metric, selected, onSelect }) {
-  const value = row.metrics[metric];
-  return <button type="button" className={`metric-tile${selected ? " selected" : ""}`} onClick={onSelect} aria-label={`${row.model}: ${formatValue(value, metric)}`}>
-    <span className="model-name">{row.model.replaceAll("_", " ")}</span>
-    <strong>{formatValue(value, metric)}</strong>
-    <span>{row.observation_count.toLocaleString()} observations</span>
-  </button>;
+function shortModelName(model) {
+  return ({ hist_gradient_boosting_cpu: "HistGradientBoosting", lightgbm_cpu: "LightGBM", xgboost_gpu: "XGBoost" })[model] ?? model.replaceAll("_", " ");
+}
+
+function shortTargetName(target) {
+  const match = target.match(/(5|10|20)s/);
+  return match ? `${match[1]} sessions` : target;
+}
+
+function ComparisonPanel({ metric, targets, models, rows, selection, onSelect }) {
+  const values = rows.map(row => row.metrics[metric]).filter(value => typeof value === "number");
+  const minValue = values.length ? Math.min(...values) : 0;
+  const maxValue = values.length ? Math.max(...values) : 1;
+  const padding = Math.max((maxValue - minValue) * 0.08, Math.abs(maxValue) * 0.02, 0.000001);
+  const min = minValue - padding;
+  const max = maxValue + padding;
+  const span = max - min || 1;
+  const zero = min <= 0 && max >= 0 ? ((0 - min) / span) * 100 : null;
+  return <article className="comparison-panel">
+    <header><div><h3>{METRIC_LABELS[metric] ?? metric}</h3><span>{metric === "rmse" || metric === "mae" || metric === "log_loss" ? "lower is better" : "higher is better"}</span></div><strong>{minValue.toFixed(3)} → {maxValue.toFixed(3)}</strong></header>
+    <div className="target-headings">{targets.map(item => <span key={item}>{shortTargetName(item)}</span>)}</div>
+    <div className="comparison-matrix">{models.map(modelName => <React.Fragment key={modelName}>
+      <span className="comparison-model"><i style={{ background: MODEL_COLORS[modelName] }} />{shortModelName(modelName)}</span>
+      {targets.map(targetName => {
+        const row = rows.find(item => item.model === modelName && item.target === targetName);
+        const value = row?.metrics[metric];
+        const position = typeof value === "number" ? ((value - min) / span) * 100 : null;
+        const selected = selection.model === modelName && selection.target === targetName && selection.metric === metric;
+        return <button type="button" key={targetName} className={`comparison-cell${selected ? " selected" : ""}`} onClick={() => onSelect(modelName, targetName, metric)} disabled={position == null} title={`${shortModelName(modelName)} · ${shortTargetName(targetName)}: ${formatValue(value, metric)}`}>
+          {zero != null && <i className="comparison-zero" style={{ left: `${zero}%` }} />}
+          {position == null ? <em>—</em> : <b style={{ left: `${position}%`, background: MODEL_COLORS[modelName] }}><u>{formatValue(value, metric)}</u></b>}
+        </button>;
+      })}
+    </React.Fragment>)}</div>
+  </article>;
 }
 
 function FoldChart({ payload, metric }) {

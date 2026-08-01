@@ -4,6 +4,18 @@ The viewer loads adjusted OHLCV data from a temporary local FastAPI service.
 The browser only knows the service's HTTP URL, so the API can later move
 without changing viewer behavior.
 
+## Activate workspace-local tools
+
+This workspace includes a local Node 22 runtime and local Python packages. In
+each new shell, activate them before using `npm`, `uvicorn`, or the API:
+
+```bash
+source scripts/activate_local_tools.sh
+```
+
+The local runtimes live under the ignored `.tools/` directory and do not
+modify the operating-system Python or Node installation.
+
 ## Start the data API
 
 Create a Python environment, install the service dependencies, and point the
@@ -14,6 +26,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r api/requirements.txt
 export PSX_DB_PATH=/path/to/psx_watcher.db
+export PSX_ML_C7_ROOT=/home/hassan/psx-ml-research
 uvicorn api.app:app --reload --port 8000
 ```
 
@@ -22,6 +35,15 @@ The service opens SQLite in read-only mode. Its endpoints are:
 - `GET /health`
 - `GET /symbols`
 - `GET /ohlcv/{symbol}`
+- `GET /ml/c7/summary`
+- `GET /ml/c7/fold-metrics`
+- `GET /ml/c7/runtime`
+- `GET /ml/c7/feature-importance`
+
+The C7 endpoints open only the accepted manifest, validation predictions, and
+feature-importance files beneath `PSX_ML_C7_ROOT`. They verify the manifest
+holdout guard, file hashes, schemas, row counts, and validation boundaries
+before returning bounded analysis responses.
 
 ## Start the viewer
 

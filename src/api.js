@@ -28,3 +28,28 @@ export async function fetchSymbols(options) {
 export function fetchOhlcv(symbol, options) {
   return fetchJson(`/ohlcv/${encodeURIComponent(symbol)}`, options);
 }
+
+function queryPath(path, parameters = {}) {
+  const query = new URLSearchParams();
+  Object.entries(parameters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  const encoded = query.toString();
+  return encoded ? `${path}?${encoded}` : path;
+}
+
+export function fetchMlSummary(options) {
+  return fetchJson("/ml/c7/summary", options);
+}
+
+export function fetchMlFoldMetrics(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/fold-metrics", parameters), options);
+}
+
+export function fetchMlRuntime(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/runtime", parameters), options);
+}
+
+export function fetchMlFeatureImportance(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/feature-importance", parameters), options);
+}

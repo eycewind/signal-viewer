@@ -1,11 +1,16 @@
 # Dependencies
 node_modules/
+.tools/
 
 # Build output
 dist/
 
 # Vite cache
 .vite/
+
+# Python cache
+__pycache__/
+*.py[cod]
 
 # Logs
 *.log

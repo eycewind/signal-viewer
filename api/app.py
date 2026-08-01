@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.ml_c7 import router as ml_c7_router
+
 
 app = FastAPI(title="Signal Viewer Data API")
 app.add_middleware(
@@ -17,6 +19,7 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+app.include_router(ml_c7_router)
 
 
 def open_database() -> sqlite3.Connection:

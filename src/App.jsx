@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { DEFAULT_SYMBOL, fetchOhlcv, fetchSymbols } from "./api";
 import SymbolSelector from "./SymbolSelector";
+import MlModelAnalysis from "./MlModelAnalysis";
 import { boundedViewport, panViewport, presetViewport, RANGE_PRESETS, zoomViewport } from "./chartViewport";
 
 /*
@@ -191,6 +192,24 @@ const COL = {
 };
 
 export default function App() {
+  const [mode, setMode] = useState("chart");
+  return (
+    <main className="viewer-shell">
+      <nav className="mode-navigation" aria-label="Viewer mode">
+        <button type="button" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart Viewer</button>
+        <button type="button" aria-pressed={mode === "ml"} onClick={() => setMode("ml")}>ML Model Analysis</button>
+      </nav>
+      <section hidden={mode !== "chart"} aria-hidden={mode !== "chart"}>
+        <ChartViewer />
+      </section>
+      <section hidden={mode !== "ml"} aria-hidden={mode !== "ml"}>
+        <MlModelAnalysis active={mode === "ml"} />
+      </section>
+    </main>
+  );
+}
+
+function ChartViewer() {
   const [cfg, setCfg] = useState(DEFAULT_CFG);
   const [bars, setBars] = useState(null);
   const [symbols, setSymbols] = useState([]);

@@ -477,10 +477,6 @@ function ChartViewer() {
   };
 
   const priceTicks = 5, rsiTicks = [30, 50, 70];
-  const openPos = signals.reduce((acc, s) => { // for stat: pair trades
-    return acc;
-  }, null);
-
   // simple trade stats
   const trades = [];
   let open = null;
@@ -495,7 +491,6 @@ function ChartViewer() {
   const wins = trades.filter(t => t.ret > 0).length;
   const avgRet = trades.length ? trades.reduce((a, t) => a + t.ret, 0) / trades.length : 0;
 
-  const num = (v, d = 0) => v.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
   const selectPreset = preset => {
     setViewport(presetViewport(bars, preset));
     setHover(null);

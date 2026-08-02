@@ -18,7 +18,7 @@ Make model-versus-target comparison the primary overview while retaining the exi
   - HistGradientBoosting CPU;
   - LightGBM deterministic CPU;
   - XGBoost GPU.
-- Display one independently scaled comparison panel per selected metric.
+- Display one comparison panel per selected metric, with shared metric scale by default and an independent-scale option.
 - Compare selected models across the 5-, 10-, and 20-session targets in every panel.
 - Selecting a plotted value updates the existing model, target, metric, fold, importance, and diagnostic drill-down.
 - Preserve all C5 artifact, holdout, read-only, performance, and no-profitability-claim constraints.
@@ -27,12 +27,13 @@ Make model-versus-target comparison the primary overview while retaining the exi
 
 - Metrics with incompatible units must never share a y-axis.
 - Every metric panel must state whether higher or lower is preferable.
-- Each panel must disclose its own visible scale.
+- Each panel must disclose whether it is using the shared metric scale or an independent visible scale.
+- Daily IC, median IC, Spearman, and quantile-spread panels must visibly label the zero reference.
 - Model color must remain consistent across panels, but color cannot be the only identifier.
 - Regression exposes ranking/error metrics; classification exposes classification metrics.
 - At least one metric and one model must remain selected.
 - No more than four metrics may be selected simultaneously.
-- Exact values must be available through hover, focus, or selection.
+- Exact values must be visible in every finite model/target cell and remain available through hover or focus.
 - The layout must remain usable on narrow screens.
 
 ## Interaction contract
@@ -61,10 +62,12 @@ Changing the analysis family resets the metric set to compatible defaults and se
 - Users can select any combination of the three nonlinear models; the final selected model cannot be removed.
 - Each selected metric renders exactly one panel containing all selected models and all three compatible horizons.
 - Values in every model/target cell match the C5 summary payload.
-- Each panel computes its scale from only its finite displayed values and preserves negative values and zero references.
+- Shared metric scale computes from all primary models for the visible horizons and is the default.
+- Independent scale computes from only finite displayed values in the selected panel.
+- Daily IC, median IC, Spearman, and quantile-spread scales preserve and label zero even when displayed values are all positive or all negative.
 - Missing or non-applicable values render as unavailable rather than zero.
 - Clicking or keyboard-activating a finite cell updates the fold comparison, feature importance, and diagnostics to the same model, target, and metric.
-- Each panel labels metric direction and exposes exact values through accessible controls.
+- Each panel labels metric direction, scale mode, visible scale bounds, and exact cell values.
 - Mobile layout retains all three target columns and provides identifiable model rows.
 - Existing C5 navigation, holdout badge, research conclusion, fold comparison, feature importance, diagnostics, loading, and error behavior remain intact.
 - Existing Chart Viewer functionality remains unchanged.

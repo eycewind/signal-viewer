@@ -53,3 +53,19 @@ export function fetchMlRuntime(parameters, options) {
 export function fetchMlFeatureImportance(parameters, options) {
   return fetchJson(queryPath("/ml/c7/feature-importance", parameters), options);
 }
+
+export function fetchMlDailyIc(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/daily-ic", parameters), options);
+}
+
+export function fetchMlDecileOutcomes(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/decile-outcomes", parameters), options);
+}
+
+export function fetchMlFeatureStability(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/feature-stability", parameters), options);
+}
+
+export function fetchMlMetricInterval(parameters, options) {
+  return fetchJson(queryPath("/ml/c7/metric-intervals", parameters), options);
+}
